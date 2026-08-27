@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  tabla - live feedback board for the workshop room. One Lambda behind a
+  public Function URL, one DynamoDB single table. Deployed by CI on merge.
+
+Parameters:
+  SessionTitle:
+    Type: String
+    Default: tabla
+    Description: Title shown on the board (set per event)
+
+Resources:
+  BoardTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub "${AWS::StackName}-board"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  BoardLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-board-fn"
+      RetentionInDays: 7
+
+  BoardFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: BoardLogGroup
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-board-fn"
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: index.handler
+      CodeUri: dist/lambda
+      MemorySize: 512
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref BoardTable
+          TABLA_SESSION: workshop
+          TABLA_TITLE: !Ref SessionTitle
+      # Public by design: the board is room-facing, unauthenticated. Nothing
+      # sensitive is stored, and the burner account dies after the event.
+      FunctionUrlConfig:
+        AuthType: NONE
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BoardTable
+
+Outputs:
+  BoardUrl:
+    Description: The board URL - open on a phone
+    Value: !GetAtt BoardFunctionUrl.FunctionUrl
+  TableName:
+    Value: !Ref BoardTable

@@ -1,0 +1,52 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+# One deploy at a time; a queued push supersedes an unstarted one.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # OIDC - no long-lived AWS keys anywhere in this repo
+  contents: read
+
+jobs:
+  deploy:
+    # Skips cleanly until the burner account is wired up (OIDC stack deployed
+    # and AWS_DEPLOY_ROLE_ARN repo variable set).
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run gate
+      - run: npm run build
+
+      - name: Assume deploy role
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Deploy
+        run: |
+          sam deploy \
+            --stack-name tabla \
+            --resolve-s3 \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --capabilities CAPABILITY_IAM
+
+      - name: Board URL
+        run: |
+          aws cloudformation describe-stacks --stack-name tabla \
+            --query 'Stacks[0].Outputs[?OutputKey==`BoardUrl`].OutputValue' \
+            --output text

@@ -1,0 +1,25 @@
+{
+  "name": "tabla",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Live feedback board for workshop rooms. Teams add features; the spine discovers them.",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "node --watch src/local.ts",
+    "gen": "node scripts/gen-manifest.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\" \"features/**/*.test.ts\"",
+    "gate": "npm run gen && npm run typecheck && npm run test",
+    "build": "npm run gen && esbuild src/lambda.ts --bundle --platform=node --format=esm --target=node22 --external:@aws-sdk/* --outfile=dist/lambda/index.mjs"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-dynamodb": "3.883.0",
+    "@aws-sdk/lib-dynamodb": "3.883.0",
+    "@types/node": "24.3.0",
+    "esbuild": "0.25.9",
+    "typescript": "5.9.2"
+  }
+}

@@ -1,0 +1,108 @@
+name: AI Review Human Override
+
+# Runs from MAIN on issue_comment - a PR cannot modify this workflow. That
+# is the same privilege boundary KiroCrew uses for its override lane.
+#
+# Command (first line of a PR comment):
+#   /ai-review override <opus|gpt-terra|all> <current-head-sha>: <reason>
+#
+# Semantics copied from KiroCrew's ai-review-human-override.yml:
+# - reason required, 500 chars max
+# - sha must be the CURRENT head: a new push invalidates the judgment
+# - only collaborators with write/maintain/admin may override
+# - the decision is recorded as an audited PR comment carrying a hidden
+#   marker; the review lanes honour the marker and the verdict re-run
+#   turns the AI Verdict status green without calling a model.
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write # re-run the review workflow after recording the judgment
+
+jobs:
+  override:
+    name: Record human judgment
+    if: >-
+      github.event.issue.pull_request != null
+      && startsWith(github.event.comment.body, '/ai-review override ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate and record the decision
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+          ACTOR: ${{ github.event.comment.user.login }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          post_notice() {
+            jq -n --arg body "$1" '{body: $body}' \
+              | gh api --method POST "repos/$REPO/issues/$PR/comments" --input - >/dev/null
+          }
+
+          first_line="${COMMENT_BODY%%$'\n'*}"
+          pattern='^/ai-review override (opus|gpt-terra|all) ([0-9a-fA-F]{7,40}):[[:space:]]*(.+)$'
+          if [[ ! "$first_line" =~ $pattern ]]; then
+            post_notice 'Override not recorded. Use `/ai-review override <opus|gpt-terra|all> <current-head-sha>: <one-sentence reason>`.'
+            exit 1
+          fi
+          target="${BASH_REMATCH[1]}"
+          requested_sha="${BASH_REMATCH[2],,}"
+          reason="${BASH_REMATCH[3]}"
+          reason="${reason#"${reason%%[![:space:]]*}"}"
+          reason="${reason%"${reason##*[![:space:]]}"}"
+          if [ -z "$reason" ]; then
+            post_notice "Override not recorded: provide a brief reason."
+            exit 1
+          fi
+          if [ "${#reason}" -gt 500 ]; then
+            post_notice "Override not recorded: keep the reason to 500 characters or fewer."
+            exit 1
+          fi
+
+          pr_json="$(gh api "repos/$REPO/pulls/$PR")"
+          head="$(printf '%s' "$pr_json" | jq -r '.head.sha')"
+          if [[ "$head" != "$requested_sha"* ]]; then
+            post_notice "Override not recorded: \`$requested_sha\` is not the current PR head. Re-run the command with \`$head\`."
+            exit 1
+          fi
+
+          permission="$(gh api "repos/$REPO/collaborators/$ACTOR/permission" \
+            --jq '.permission' 2>/dev/null || true)"
+          case "$permission" in
+            admin|maintain|write) ;;
+            *)
+              post_notice "Override not recorded: only a repository writer may override an AI finding."
+              exit 1
+              ;;
+          esac
+
+          marker="<!-- tabla-ai-override target=$target head=$head actor=$ACTOR -->"
+          printf -v decision_body '%s\n## Human judgment recorded\n\n@%s overrode the **%s** AI review lane for `%s`.\n\n> %s\n\n_This decision applies only to this commit. A new push requires a new judgment._' \
+            "$marker" "$ACTOR" "$target" "$head" "$reason"
+          post_notice "$decision_body"
+
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+
+      - name: Re-run the review lanes with the human decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD: ${{ steps.context.outputs.head }}
+        run: |
+          set -euo pipefail
+          run_id="$(gh api "repos/$REPO/actions/workflows/ai-review.yml/runs?head_sha=$HEAD&per_page=1" \
+            --jq '.workflow_runs[0].id // empty')"
+          if [ -z "$run_id" ]; then
+            echo "::error::No AI Review run found for $HEAD"
+            exit 1
+          fi
+          gh api --method POST "repos/$REPO/actions/runs/$run_id/rerun" >/dev/null
+          echo "Re-running AI Review run $run_id for $HEAD - the lanes will honour the recorded judgment."

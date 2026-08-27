@@ -1,0 +1,43 @@
+name: Fork Notice
+
+# tabla takes branch PRs only - the review lanes need OIDC, which GitHub
+# rightly withholds from fork-triggered runs. Without this workflow a fork
+# PR just hangs forever on "waiting for AI Verdict". This makes it fail
+# FAST and LOUD with instructions instead.
+#
+# SECURITY: pull_request_target runs privileged from the BASE repo. That is
+# safe here for exactly one reason - this workflow NEVER checks out or
+# executes anything from the PR. It reads event metadata and calls the
+# GitHub API. Do not add a checkout step to this file.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  pull-requests: write
+  statuses: write
+
+jobs:
+  fork-notice:
+    name: Fork PR notice
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail AI Verdict with instructions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f state="failure" \
+            -f context="AI Verdict" \
+            -f description="Fork PRs are not accepted - push a branch to this repo instead"
+
+      - name: Explain once per PR
+        if: github.event.action == 'opened' || github.event.action == 'reopened'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "👋 This PR comes from a fork, and tabla takes **branch PRs only**: the AI review lanes authenticate to AWS via OIDC, which GitHub withholds from fork-triggered workflows (correctly - that is what prevents credential exfiltration). Ask the facilitator for write access, then push your branch directly to this repository and open the PR from it. Your commits can be reused: \`git push <this-repo> <your-branch>\`."

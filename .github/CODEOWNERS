@@ -1,0 +1,16 @@
+# tabla code owners - SCOPED on purpose.
+#
+# Feature directories are unowned: any collaborator's cross-team approval
+# satisfies review there, and the facilitator is not a merge bottleneck.
+#
+# The machinery that judges PRs is different: pull_request workflows run
+# from the PR's merge ref, so a PR could otherwise edit the reviewer that
+# judges it (rehearsal finding #6). Changes here require the facilitator.
+
+/.github/     @darko-mesaros
+/src/spine/   @darko-mesaros
+
+# Infrastructure deploys with the CI role's powers - every change here
+# needs the facilitator's eyes, including the designated infra team's.
+/template.yaml @darko-mesaros
+/infra/        @darko-mesaros

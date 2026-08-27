@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.aws-sam/
+src/manifest.gen.ts
+.DS_Store
+*.log

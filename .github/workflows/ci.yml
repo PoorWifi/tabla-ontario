@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: gate (typecheck + tests + bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run gate
+      - run: npm run build
+
+  pr-hygiene:
+    name: pr-hygiene (title + one commit)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conventional Commits PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if echo "$TITLE" | grep -qE '^(feat|fix|docs|chore|refactor|test|ci)(\([a-z0-9-]+\))?: .+'; then
+            echo "title ok: $TITLE"
+          else
+            echo "::error::PR title must be Conventional Commits (it becomes the squash-merge message)."
+            echo "::error::Examples: 'feat(reactions): add emoji bar' or 'fix: handle empty session'"
+            exit 1
+          fi
+      - name: Exactly one commit
+        env:
+          COUNT: ${{ github.event.pull_request.commits }}
+        run: |
+          if [ "$COUNT" -eq 1 ]; then
+            echo "one commit - clean history"
+          else
+            echo "::error::PR has $COUNT commits; squash to one (git rebase -i or git reset --soft)."
+            exit 1
+          fi
+
+  # The one status worth watching. Fail-closed: a skipped or cancelled
+  # upstream job counts as failure, because GitHub treats a skipped
+  # required check as satisfied.
+  readiness:
+    name: PR Readiness
+    if: always() && github.event_name == 'pull_request'
+    needs: [gate, pr-hygiene]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate
+        env:
+          GATE: ${{ needs.gate.result }}
+          HYGIENE: ${{ needs['pr-hygiene'].result }}
+        run: |
+          echo "gate=$GATE pr-hygiene=$HYGIENE"
+          if [ "$GATE" = "success" ] && [ "$HYGIENE" = "success" ]; then
+            echo "readiness: passed"
+          else
+            echo "::error::readiness: action required (fix the failing job above, then push)"
+            exit 1
+          fi

@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  tabla - one-time GitHub OIDC setup for the burner account. Two roles with
+  different trust scopes: DeployRole trusts ONLY pushes to main (it can
+  deploy the stack); ReviewRole trusts ONLY pull_request runs (it can invoke
+  Bedrock for the AI reviewer and nothing else). No long-lived keys anywhere.
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Description: >
+      Repo path as it appears in the OIDC sub claim. For orgs with immutable
+      subject claims (GitHub default for new orgs) this is the ID-pinned form
+      "org@ORGID/repo@REPOID" - read it from
+      GET /repos/{org}/{repo}/actions/oidc/customization/sub (sub_claim_prefix).
+      Classic form "org/repo" only works for accounts still on mutable claims.
+  GitHubRepoSecondary:
+    Type: String
+    Default: "aws-hacktivity@319886780/tabla@1342396315"
+    Description: >
+      Second trusted repo (same ID-pinned form). Defaults to the tabla
+      TEMPLATE repo so its own maintenance PRs keep working review lanes
+      while an event repo holds the primary slot. One OIDC stack serves
+      both - trust conditions are value lists (OR semantics).
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        # Ignored by IAM for GitHub's provider (trust chains to a public CA),
+        # but the property is required by the resource type.
+        - "6938fd4d98bab03faadb97b34396831e3780aea1"
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: tabla-github-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # deploy.yml runs in GitHub environment "production", and an
+                # environment-scoped job's OIDC sub claim is the ENVIRONMENT
+                # form, not the branch ref. The environment itself is locked
+                # to protected branches (main) on the GitHub side.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubRepo}:environment:production"
+                  - !Sub "repo:${GitHubRepoSecondary}:environment:production"
+      Policies:
+        - PolicyName: deploy-tabla-stack
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CloudFormation
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:Describe*
+                  - cloudformation:List*
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                Resource:
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/tabla*/*"
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/aws-sam-cli-managed-default/*"
+              - Sid: SamTransform
+                # SAM templates authorize the transform itself: CreateChangeSet
+                # must be allowed on this pseudo-ARN (account is literally "aws").
+                Effect: Allow
+                Action: cloudformation:CreateChangeSet
+                Resource: "arn:aws:cloudformation:*:aws:transform/Serverless-2016-10-31"
+              - Sid: SamManagedBucket
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketTagging
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutBucketVersioning
+                  - s3:PutBucketPublicAccessBlock
+                Resource:
+                  - "arn:aws:s3:::aws-sam-cli-managed-default*"
+              - Sid: ResourcesTheStackCreates
+                Effect: Allow
+                Action:
+                  - lambda:*
+                  - dynamodb:*
+                  - logs:*
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Sid: PassAndManageFunctionRole
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/tabla*"
+
+  ReviewRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: tabla-github-review
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubRepo}:pull_request"
+                  - !Sub "repo:${GitHubRepoSecondary}:pull_request"
+      Policies:
+        - PolicyName: invoke-bedrock-only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - "arn:aws:bedrock:*::foundation-model/*"
+                  - !Sub "arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*"
+
+Outputs:
+  DeployRoleArn:
+    Description: Set as repo variable AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt DeployRole.Arn
+  ReviewRoleArn:
+    Description: Set as repo variable AWS_REVIEW_ROLE_ARN
+    Value: !GetAtt ReviewRole.Arn

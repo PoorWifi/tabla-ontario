@@ -1,0 +1,80 @@
+# tabla review rules - loaded FROM THE PR'S BASE COMMIT by both AI lanes,
+# so a pull request cannot edit the rules it is judged by.
+#
+# AUTOSDE-style: rules are data. Each has an id (findings must cite one),
+# a blocking flag (ONLY blocking:true violations justify BLOCK-MERGE), and
+# the why. Blocking rules are backed by real findings in this repo's
+# rehearsals - this is not a style guide.
+
+rules:
+  - id: feature-isolation
+    blocking: true
+    applies-to: "everything"
+    rule: |
+      A feature PR touches only its own features/<name>/ directory.
+      src/spine/, .github/, template.yaml and infra/ are gated paths
+      (CODEOWNERS routes them to the facilitator; your BLOCK is the early
+      warning). Infra changes are legitimate ONLY for a facilitator-
+      designated infra team, and the facilitator clears the BLOCK via
+      override after reviewing. Why: the directory spine is what lets N
+      teams merge all day without conflicts - one shared-file edit
+      reintroduces the failure mode this repo exists to remove.
+
+  - id: name-matches-directory
+    blocking: true
+    applies-to: "features/*/feature.ts"
+    rule: |
+      The Feature's `name` equals its directory name. Why: discovery and
+      the build manifest key on it; a mismatch is unmergeable anyway (the
+      GATE test names the directory), so catch it in review with a better
+      message.
+
+  - id: store-key-convention
+    blocking: true
+    applies-to: "features/**"
+    rule: |
+      Store keys follow pk `SESSION#<sessionId>`, sk `<TYPE>#<discriminator>`.
+      Choose the write primitive by the SEMANTICS THE SPEC ASKS FOR:
+      count-once/idempotent actions need `putIfAbsent` with the caller id
+      in the sk (reactions); latest-wins/replace state needs plain `put`
+      on a caller-keyed sk (word-cloud). Neither primitive is "the rule" -
+      flag a MISMATCH between the spec's stated semantics and the
+      primitive used, not the primitive itself. Why: rehearsal PR #12
+      produced a false BLOCK by reading "always putIfAbsent" into this
+      rule; the spec governs.
+
+  - id: validate-at-the-boundary
+    blocking: true
+    applies-to: "features/**"
+    rule: |
+      Handlers validate input and return 400 - never throw on bad input.
+      All user-supplied text is untrusted: HTML-escape anything a card
+      renders (a single word can be `<script>`), and reject inputs that
+      are empty after trimming (a whitespace-only session id mints a junk
+      partition - real rehearsal finding).
+
+  - id: prototype-safe-aggregation
+    blocking: true
+    applies-to: "features/**"
+    rule: |
+      User strings used as object keys corrupt plain object literals:
+      "constructor" string-concatenates against the inherited member and
+      "__proto__" is silently dropped. Aggregate in a Map and convert with
+      Object.fromEntries. Why: found live in rehearsal PR #12 - the word
+      "constructor" is a plausible submission at a dev workshop.
+
+  - id: tests-through-router
+    blocking: false
+    applies-to: "features/*/feature.test.ts"
+    rule: |
+      Tests drive routes through Router.dispatch, never bare handler
+      calls - that is what exercises path matching, query parsing, and
+      caller identity.
+
+  - id: no-scope-creep
+    blocking: false
+    applies-to: "everything"
+    rule: |
+      No abstractions, config options, or error handling for states the
+      spec does not name today. A workshop feature is an afternoon-sized
+      artifact; generality is a cost, not a virtue.
