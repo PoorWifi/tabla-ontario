@@ -108,9 +108,3 @@ aws login                      # creds for the burner account
 CI deploys on every merge to `main` once the one-time OIDC setup is done -
 see `infra/github-oidc.yaml` and STATUS.md. Wipe the burner for reuse with
 `./scripts/burner-cleanup.sh us-east-1`.
-
-## Status
-
-Stage 2 complete: DynamoDB store + Lambda (Function URL) + SAM template +
-CI (gate, pr-hygiene, readiness, advisory AI review via Bedrock OIDC).
-See STATUS.md for the test gates and open items.
